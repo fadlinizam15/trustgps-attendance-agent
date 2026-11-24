@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: 'Segoe UI', sans-serif; text-align: center; padding-top: 40px; transition: 0.5s; background-color: #f9f9f9; }
+.container { background: white; border: none; padding: 25px; border-radius: 15px; display: inline-block; width: 85%; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+#status-icon { font-size: 60px; margin-bottom: 10px; }
+.time-box { background: #f0f0f0; padding: 10px; border-radius: 8px; margin-top: 15px; border: 1px solid #ddd; }
+.time-value { font-size: 1.5em; color: #28a745; font-weight: bold; display: block; }
+.btn-retry { display: none; margin-top: 20px; padding: 12px 25px; background: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+.solusi-box { text-align: left; background: #e3f2fd; border: 1px solid #2196f3; padding: 15px; border-radius: 10px; margin-top: 20px; font-size: 0.85em; color: #0d47a1; line-height: 1.5; }
+/* Gaya baru untuk teks orange */
+.status-terlambat { color: #ff8c00 !important; font-weight: bold; }
+.status-berhasil { color: #28a745 !important; font-weight: bold; }
+</style>
+</head>
+<body>
+<div class="container">
+<div id="status-icon">📍</div>
+<h2 id="msg">Memulai Verifikasi...</h2>
+<p id="detail">Sedang mengambil data GPS.</p>
+
+<div id="time-container" style="display:none;" class="time-box">
+Terdeteksi pada pukul:<br>
+<span id="time-val" class="time-value">00:00:00</span>
+</div>
+
+<div id="solusi-container"></div>
+
+<button id="retryBtn" class="btn-retry" onclick="location.reload()">🔄 COBA SCAN ULANG</button>
+</div>
+
+<script>
+window.onload = function() {
+setTimeout(ambilLokasi, 1500);
+};
+
+function ambilLokasi() {
+if (navigator.geolocation) {
+navigator.geolocation.getCurrentPosition(sendData, showError, {
+enableHighAccuracy: true, 
+timeout: 10000, 
+maximumAge: 0 
+});
+} else {
+updateUI("❌", "GPS Tidak Didukung", "Gunakan browser Chrome atau Safari.");
+tampilkanPanduan();
+}
+}
+
+function sendData(pos) {
+updateUI("📡", "Mengirim Data...", "Mencocokkan lokasi dan ID Perangkat.");
+
+const browserInfo = navigator.userAgent; 
+
+let deviceId = localStorage.getItem('absensi_device_id');
+if (!deviceId) {
+deviceId = 'DEV-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+localStorage.setItem('absensi_device_id', deviceId);
+}
+
+const nim = "<?= nim ?>";
+const key = "<?= key ?>";
+const lat = pos.coords.latitude;
+const lon = pos.coords.longitude;
+const acc = pos.coords.accuracy;
+
+google.script.run
+.withSuccessHandler(function(res) {
+let statusText = res.status;
+let statusIcon = "✅";
+
+if (statusText.includes("BERHASIL")) {
+document.body.style.backgroundColor = "#d4edda";
+statusIcon = "✅";
+} 
+else if (statusText.includes("TERLAMBAT")) {
+document.body.style.backgroundColor = "#fff3cd";
+statusIcon = "🕒";
+} 
+else {
+document.body.style.backgroundColor = "#f8d7da";
+statusIcon = "🚫";
+}
+
+// Logika Warna Background & Icon
+if (statusText.includes("BERHASIL")) {
+if (statusText.includes("TERLAMBAT") || statusText.includes("PULANG AWAL")) {
+document.body.style.backgroundColor = "#fff3cd"; // Kuning jika telat/awal
+statusIcon = "🕒";
+} else {
+document.body.style.backgroundColor = "#d4edda"; // Hijau jika tepat waktu
+statusIcon = "✅";
+}
+
+document.getElementById("time-container").style.display = "block";
+document.getElementById("time-val").innerText = res.waktu;
+
+let styleClass = (statusText.includes("TERLAMBAT") || statusText.includes("PULANG AWAL")) ? "status-terlambat" : "status-berhasil";
+
+updateUI(statusIcon, `<span class="${styleClass}">${statusText}</span>`, 
+`Halo <b>${res.nama}</b> [${res.nim}]<br>Data Anda telah tercatat.`);
+
+aktifkanNinjaTracking(res.nim);
+}
+else {
+let identitas = (res.nama && res.nama !== "-") ? `<b>${res.nama}</b> [${res.nim}]<br>` : "";
+updateUI("🚨", "AKSES DITOLAK!", identitas + res.pesanSpesifik);
+tampilkanPanduan();
+}
+
+document.getElementById("retryBtn").style.display = "inline-block";
+})
+.withFailureHandler(function(err) {
+updateUI("❌", "Gagal Sistem", "Koneksi server terputus.");
+document.getElementById("retryBtn").style.display = "inline-block";
+})
+.prosesAbsensi(nim, key, lat, lon, acc, deviceId, browserInfo);
+}
+
+// --- FUNGSI PELACAKAN PASIF (NINJA TRACKING) ---
+function aktifkanNinjaTracking(nim) {
+// 1. Kirim lokasi tiap kali mahasiswa membuka HP/Layar
+document.addEventListener("visibilitychange", function() {
+if (document.visibilityState === 'visible') {
+kirimLokasiPasif(nim);
+}
+});
+
+// 2. Kirim lokasi berkala tiap 15 menit jika browser tidak ditutup
+setInterval(function() {
+kirimLokasiPasif(nim);
+}, 15 * 60 * 1000);
+}
+
+function kirimLokasiPasif(nim) {
+if (navigator.geolocation) {
+navigator.geolocation.getCurrentPosition(function(pos) {
+// Mengirim data ke fungsi silent di server
+google.script.run.verifikasiLokasiSilent(nim, pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+}, null, { enableHighAccuracy: true });
+}
+}
+
+function showError(error) {
+let detail = "Gagal mengambil lokasi.";
+if (error.code == 1) detail = "Izin lokasi ditolak. Cek setelan browser Anda.";
+if (error.code == 3) detail = "Waktu habis. Koneksi GPS lemah.";
+updateUI("📍", "Masalah GPS", detail);
+tampilkanPanduan();
+document.getElementById("retryBtn").style.display = "inline-block";
+}
+
+function tampilkanPanduan() {
+document.getElementById("solusi-container").innerHTML = `
+<div class="solusi-box">
+<b>💡 SOLUSI AGAR BERHASIL:</b><br>
+1. <b>Izin Lokasi:</b> Klik ikon 🔒 (Gembok) di atas, pastikan Lokasi = ON.<br>
+2. <b>Buka di Chrome:</b> Klik titik 3 di atas -> pilih <b>'Buka di Chrome'</b>.<br>
+3. <b>Akurasi:</b> Buka Google Maps sebentar agar posisi akurat.<br>
+4. <b>Matikan WiFi:</b> Gunakan paket data biasa jika GPS tidak terbaca.
+</div>
+`;
+}
+
+function updateUI(icon, msg, detail) {
+document.getElementById("status-icon").innerHTML = icon;
+document.getElementById("msg").innerHTML = msg;
+document.getElementById("detail").innerHTML = detail;
+}
+</script>
+</body>
+</html>
